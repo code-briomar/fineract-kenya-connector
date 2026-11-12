@@ -4,12 +4,14 @@ import com.kenyafintech.connector.model.MpesaC2BPayload;
 import com.kenyafintech.connector.service.FineractClient;
 import com.kenyafintech.connector.service.IdempotencyService;
 import com.kenyafintech.connector.service.NotificationService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 import java.util.Optional;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/mpesa")
 public class MpesaWebhookController {
@@ -18,7 +20,8 @@ public class MpesaWebhookController {
     private final NotificationService notificationService;
     private final IdempotencyService idempotencyService;
 
-    public MpesaWebhookController(FineractClient fineractClient,
+    public MpesaWebhookController(
+            FineractClient fineractClient,
             NotificationService notificationService,
             IdempotencyService idempotencyService) {
         this.fineractClient = fineractClient;
@@ -26,56 +29,41 @@ public class MpesaWebhookController {
         this.idempotencyService = idempotencyService;
     }
 
-    /**
-     * Safaricom C2B Validation hook:
-     * Validates whether the account exists in Fineract BEFORE money leaves the
-     * customer's phone!
-     */
     @PostMapping("/validation")
     public ResponseEntity<Map<String, Object>> validatePayment(@RequestBody MpesaC2BPayload payload) {
-        System.out.println("Validating C2B payment for Account Ref: " + payload.getBillRefNumber());
+        log.info("C2B validation request received for ref: {}", payload.getBillRefNumber());
 
         Optional<Long> accountIdOpt = fineractClient.resolveSavingsAccountId(payload.getBillRefNumber());
-
         if (accountIdOpt.isEmpty()) {
-            System.out.println("Validation REJECTED: Account not found in Fineract Core Banking.");
-            // Safaricom standard C2B rejection code
+            log.warn("Validation rejected: account not found for ref {}", payload.getBillRefNumber());
             return ResponseEntity.ok(Map.of(
                     "ResultCode", "C2B00012",
-                    "ResultDesc", "Rejected: Account number does not exist"));
+                    "ResultDesc", "Rejected: Account number does not exist"
+            ));
         }
 
-        System.out.println("Validation ACCEPTED for Fineract Account ID: " + accountIdOpt.get());
         return ResponseEntity.ok(Map.of("ResultCode", 0, "ResultDesc", "Accepted"));
     }
 
-    /**
-     * Safaricom C2B Confirmation hook:
-     * Protects against duplicate replays and posts to core banking.
-     */
     @PostMapping("/confirmation")
     public ResponseEntity<Map<String, Object>> confirmPayment(@RequestBody MpesaC2BPayload payload) {
         String transId = payload.getTransId();
-        System.out
-                .println("Processing M-Pesa payment confirmation: " + transId + " of KES " + payload.getTransAmount());
+        log.info("Processing C2B confirmation: txn={}, amount=KES {}", transId, payload.getTransAmount());
 
-        // 1. Idempotency Check: Protect against duplicate webhook replays
         if (idempotencyService.isDuplicate(transId)) {
-            System.out.println("⚠️ Replay detected! Transaction " + transId
-                    + " was already processed. Acknowledging Safaricom safely.");
+            log.warn("Duplicate webhook ignored for txn: {}", transId);
             return ResponseEntity.ok(Map.of("ResultCode", 0, "ResultDesc", "Duplicate transaction acknowledged"));
         }
 
-        // 2. Dynamic Account Resolution
-        Optional<Long> accountIdOpt = fineractClient.resolveSavingsAccountId(payload.getBillRefNumber());
-        Long accountId = accountIdOpt.orElse(1L);
-
-        // 3. Post to Fineract Core Banking Ledger
+        Long accountId = fineractClient.resolveSavingsAccountId(payload.getBillRefNumber()).orElse(1L);
         fineractClient.recordSavingsDeposit(accountId, Double.parseDouble(payload.getTransAmount()), transId);
 
-        // 4. Dispatch Africa's Talking SMS receipt
-        notificationService.sendDepositReceipt(payload.getMsisdn(), payload.getTransAmount(),
-                payload.getBillRefNumber(), transId);
+        notificationService.sendDepositReceipt(
+                payload.getMsisdn(),
+                payload.getTransAmount(),
+                payload.getBillRefNumber(),
+                transId
+        );
 
         return ResponseEntity.ok(Map.of("ResultCode", 0, "ResultDesc", "Success"));
     }

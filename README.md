@@ -13,41 +13,7 @@ When someone pays your Paybill or dials \*384# on a phone, it automatically upda
 
 ## The Architecture
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Member as SACCO Member
-    participant MPesa as Safaricom M-Pesa
-    participant AT as Africa's Talking Gateway
-    participant Connector as Kenya Connector (Spring Boot)
-    participant Fineract as Apache Fineract (Core Banking)
-    %% Scenario 1: M-Pesa C2B Paybill Flow
-    rect rgb(240, 248, 255)
-    Note over Member, Fineract: 1. M-Pesa C2B Paybill Deposit Flow
-    Member->>MPesa: Paybill Deposit (e.g. KES 1,500 to Acc 001)
-    MPesa->>Connector: POST /api/v1/mpesa/validation
-    Connector-->>MPesa: 200 OK (ResultCode: 0)
-    MPesa->>Connector: POST /api/v1/mpesa/confirmation
-    Connector->>Fineract: POST /savingsaccounts/{id}/transactions (Deposit)
-    Fineract-->>Connector: 200 OK (Ledger updated)
-    Connector->>AT: Dispatch SMS confirmation
-    AT-->>Member: SMS: "KES 1,500 received for Acc 001. Ref: RKT..."
-    Connector-->>MPesa: 200 OK (ResultCode: 0)
-    end
-    %% Scenario 2: USSD Self-Service Flow
-    rect rgb(255, 250, 240)
-    Note over Member, Fineract: 2. USSD Session (*384# Feature Phone Banking)
-    Member->>AT: Dials *384*100#
-    AT->>Connector: POST /api/v1/ussd (text="")
-    Connector-->>AT: CON 1. Balance 2. Mini-statement
-    Member->>AT: Selects "1"
-    AT->>Connector: POST /api/v1/ussd (text="1")
-    Connector->>Fineract: GET /savingsaccounts/{id}
-    Fineract-->>Connector: Returns real-time ledger balance
-    Connector-->>AT: END Chama Balance: KES 15,250.00
-    AT-->>Member: Displays balance screen
-    end
-```
+![Architecture](docs/architecture.png)
 
 ---
 
